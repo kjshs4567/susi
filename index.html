@@ -297,8 +297,9 @@
   <header class="bg-slate-900 text-white shadow-md sticky top-0 z-30">
     <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-4">
       <div class="flex items-center space-x-3">
-        <div class="p-2 bg-indigo-600 rounded-lg">
-          <i class="fa-solid fa-graduation-cap text-2xl text-white"></i>
+        <div id="schoolLogoHeaderWrap" class="p-2 bg-indigo-600 rounded-lg flex items-center justify-center" style="min-width:48px;min-height:48px">
+          <i id="schoolLogoHeaderFallback" class="fa-solid fa-graduation-cap text-2xl text-white"></i>
+          <img id="schoolLogoHeader" alt="학교 로고" class="hidden object-contain" style="width:48px;height:48px;max-width:64px;max-height:64px" />
         </div>
         <div>
           <h1 class="text-lg font-bold tracking-tight">2026 대입 진학 관리 & 누적 통계 시스템</h1>
@@ -348,7 +349,7 @@
   <div id="loginView" class="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
       <div class="bg-slate-800 text-white p-6 text-center">
-        <i class="fa-solid fa-user-shield text-4xl text-indigo-400 mb-2"></i>
+        <div class="flex justify-center mb-2"><i id="schoolLogoLoginFallback" class="fa-solid fa-user-shield text-4xl text-indigo-400"></i><img id="schoolLogoLogin" alt="학교 로고" class="hidden object-contain" style="width:76px;height:76px" /></div>
         <h2 id="loginTitle" class="text-xl font-bold">진학 시스템 로그인</h2>
         <p id="loginSubtitle" class="text-xs text-slate-400 mt-1">접속 권한 유형을 선택하고 비밀번호를 입력하세요.</p>
       </div>
@@ -638,6 +639,14 @@
           <button onclick="enterTeacherMode('overall')" class="teacher-mode-card border rounded-2xl p-5 text-left bg-indigo-50"><div class="w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center mb-3"><i class="fa-solid fa-database text-lg"></i></div><b>수시 데이터 업로드</b><p class="text-xs mt-1">지원 자료 조회 및 업로드</p></button>
           <button onclick="openManualGradeMode()" class="teacher-mode-card border rounded-2xl p-5 text-left bg-emerald-50"><div class="w-11 h-11 rounded-xl bg-emerald-600 text-white flex items-center justify-center mb-3"><i class="fa-solid fa-file-excel text-lg"></i></div><b>성적 데이터 업로드</b><p class="text-xs mt-1">양식 다운로드 및 내신 등급 업로드</p></button>
           <button onclick="openInterviewReviewManager()" class="teacher-mode-card border rounded-2xl p-5 text-left bg-cyan-50"><div class="w-11 h-11 rounded-xl bg-cyan-600 text-white flex items-center justify-center mb-3"><i class="fa-solid fa-comments text-lg"></i></div><b>면접 후기 관리</b><p class="text-xs mt-1">제출 내역 검토, 공개 승인, 개별·일괄 등록</p></button>
+          <section class="border rounded-2xl p-5 bg-violet-50 text-left">
+            <div class="w-11 h-11 rounded-xl bg-violet-600 text-white flex items-center justify-center mb-3"><i class="fa-solid fa-school text-lg"></i></div>
+            <b>학교 로고 관리</b><p class="text-xs mt-1 mb-3">로그인 화면과 좌측 상단에 표시할 로고를 업로드하거나 삭제합니다.</p>
+            <div class="flex items-center gap-3 mb-3"><img id="schoolLogoAdminPreview" class="hidden object-contain bg-white border rounded p-1" style="width:64px;height:64px" alt="학교 로고 미리보기"><span id="schoolLogoAdminEmpty" class="text-xs text-slate-500">등록된 로고가 없습니다.</span></div>
+            <label class="inline-flex cursor-pointer items-center gap-2 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded-lg px-3 py-2"><i class="fa-solid fa-upload"></i> 로고 업로드<input id="schoolLogoFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="hidden" onchange="handleSchoolLogoUpload(event)"></label>
+            <button type="button" onclick="deleteSchoolLogo()" class="ml-1 bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold rounded-lg px-3 py-2">삭제</button>
+            <p class="text-[10px] text-slate-500 mt-2">PNG, JPG, WEBP, GIF 지원. 업로드 이미지는 자동으로 크기를 줄여 저장합니다.</p>
+          </section>
         </div>
         <div id="adminFeatureVisibilityPanel" class="hidden mt-6 border-t border-slate-200 pt-4">
           <h3 class="text-sm font-extrabold text-slate-800 mb-2">초기 화면 기능 노출 설정</h3>
@@ -3341,6 +3350,49 @@
     function selectedAdminReviewRows(){const ids=[...document.querySelectorAll('.admin-review-select:checked')].map(x=>x.value);return allInterviewReviews().filter(r=>ids.includes(String(r.id)));}
     function selectAllAdminReviews(on){document.querySelectorAll('.admin-review-select').forEach(x=>x.checked=!!on)}
     function printSelectedAdminReviews(){const rows=selectedAdminReviewRows();if(!rows.length){alert('인쇄할 제출 내역을 먼저 체크해 주세요.');return;}const w=window.open('','_blank');if(!w){alert('팝업을 허용한 뒤 다시 시도해 주세요.');return;}w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>면접 후기 제출 내역</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#222}article{page-break-inside:avoid;border:1px solid #bbb;border-radius:8px;padding:16px;margin-bottom:16px}h2{font-size:18px}h3{background:#eef4fb;padding:8px}small{color:#555} .content{white-space:pre-wrap;line-height:1.6}</style></head><body><h1>면접 후기 제출 내역</h1>'+rows.map(r=>`<article><h2>${escapeHtml(r.universityInfo||'정보 없음')}</h2><small>${escapeHtml(r.year||'')} · ${escapeHtml(r.studentClass||'')}반 ${escapeHtml(r.studentId||'')}번 · ${escapeHtml(r.studentName||'')}</small><h3>면접 형식</h3><p>${escapeHtml(r.format||'')}</p><h3>면접 시작 상황/질문</h3><div class="content">${r.contentStart||r.content||''}</div><h3>면접 마무리 상황/질문</h3><div class="content">${r.contentEnd||''}</div><h3>Self 분석 및 조언</h3><p>${escapeHtml(r.outcome||'')}</p><p>${escapeHtml(r.tips||'')}</p></article>`).join('')+'\n');w.document.close();w.print();}
+</script>
+<script>
+/* School logo manager: saved in localStorage and synchronized by the shared server bridge. */
+(function(){
+  const SCHOOL_LOGO_KEY='jinsang_school_logo_data_v1';
+  function getLogo(){try{return localStorage.getItem(SCHOOL_LOGO_KEY)||'';}catch(e){return '';}}
+  function paintLogo(){
+    const src=getLogo();
+    const headerImg=document.getElementById('schoolLogoHeader'), headerFallback=document.getElementById('schoolLogoHeaderFallback');
+    const loginImg=document.getElementById('schoolLogoLogin'), loginFallback=document.getElementById('schoolLogoLoginFallback');
+    const preview=document.getElementById('schoolLogoAdminPreview'), empty=document.getElementById('schoolLogoAdminEmpty');
+    [[headerImg,headerFallback],[loginImg,loginFallback],[preview,empty]].forEach(([img,fallback])=>{
+      if(!img)return;
+      if(src){img.src=src;img.classList.remove('hidden');if(fallback)fallback.classList.add('hidden');}
+      else{img.removeAttribute('src');img.classList.add('hidden');if(fallback)fallback.classList.remove('hidden');}
+    });
+    if(empty)empty.classList.toggle('hidden',!!src);
+  }
+  window.handleSchoolLogoUpload=function(event){
+    const file=event?.target?.files?.[0];if(!file)return;
+    if(!/^image\/(png|jpeg|webp|gif)$/.test(file.type)){alert('PNG, JPG, WEBP 또는 GIF 이미지 파일을 선택해 주세요.');event.target.value='';return;}
+    if(file.size>8*1024*1024){alert('이미지 크기는 8MB 이하로 선택해 주세요.');event.target.value='';return;}
+    const reader=new FileReader();
+    reader.onerror=()=>{alert('이미지를 읽지 못했습니다. 다른 파일로 시도해 주세요.');event.target.value='';};
+    reader.onload=()=>{
+      const image=new Image();image.onerror=()=>{alert('이미지 파일을 열 수 없습니다.');event.target.value='';};
+      image.onload=()=>{
+        const max=480, scale=Math.min(1,max/Math.max(image.width,image.height));
+        const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(image.width*scale));canvas.height=Math.max(1,Math.round(image.height*scale));
+        const ctx=canvas.getContext('2d');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,0,0,canvas.width,canvas.height);
+        let data='';try{data=canvas.toDataURL('image/jpeg',0.86);}catch(e){alert('이미지 변환에 실패했습니다.');return;}
+        if(data.length>650000){alert('이미지 용량을 줄이지 못했습니다. 더 작은 이미지로 시도해 주세요.');return;}
+        try{localStorage.setItem(SCHOOL_LOGO_KEY,data);paintLogo();alert('학교 로고를 저장했습니다. 서버가 연결되어 있으면 다른 기기에도 동기화됩니다.');}
+        catch(e){alert('로고를 저장하지 못했습니다. 브라우저 저장 공간을 확인해 주세요.');}
+        event.target.value='';
+      };image.src=String(reader.result||'');
+    };reader.readAsDataURL(file);
+  };
+  window.deleteSchoolLogo=function(){if(!getLogo()){alert('삭제할 로고가 없습니다.');return;}if(!confirm('학교 로고를 삭제할까요? 로그인 화면과 좌측 상단에서 기본 아이콘이 표시됩니다.'))return;try{localStorage.removeItem(SCHOOL_LOGO_KEY);paintLogo();alert('학교 로고를 삭제했습니다. 서버가 연결되어 있으면 삭제 내용도 동기화됩니다.');}catch(e){alert('로고 삭제 중 오류가 발생했습니다.');}};
+  document.addEventListener('DOMContentLoaded',paintLogo);
+  window.addEventListener('storage',e=>{if(e.key===SCHOOL_LOGO_KEY)paintLogo();});
+  if(document.readyState!=='loading')paintLogo();
+})();
 </script>
 <script>
 /* Shared storage bridge: GitHub Pages <-> Google Apps Script */
