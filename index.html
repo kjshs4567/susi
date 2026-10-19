@@ -1263,7 +1263,26 @@
     function callServer(functionName, ...args) {
       return new Promise((resolve, reject) => {
         if (!isAppsScriptRuntime()) {
-          reject(new Error('Google Apps Script 서버 연결이 없습니다. 이 파일은 Apps Script 웹앱에서 실행해야 서버 저장 기능을 사용할 수 있습니다.'));
+          // GitHub Pages mode: persist the current app state through the Apps Script iframe bridge.
+          // The bridge returns a server-side acknowledgement; localStorage alone is not treated as success.
+          if (!window.jinsangServerStorage || typeof window.jinsangServerStorage.syncState !== 'function') {
+            reject(new Error('서버 연결 기능을 불러오지 못했습니다. 서버 URL을 확인하고 새로고침해 주세요.'));
+            return;
+          }
+          try {
+            // Mirror live in-memory stores to localStorage before the acknowledged server sync.
+            if (typeof rawDatabase !== 'undefined') saveLocalJsonSafe('jinsang_applications_v1', rawDatabase);
+            if (typeof years !== 'undefined') saveLocalJsonSafe('jinsang_years_v1', years);
+            if (typeof passwords !== 'undefined') saveLocalJsonSafe('jinsang_passwords_v1', passwords);
+            if (typeof studentGrades !== 'undefined') saveLocalJsonSafe('jinsang_student_grades_v1', studentGrades);
+            if (typeof academicRecords !== 'undefined') saveLocalJsonSafe('jinsang_academic_records_v1', academicRecords);
+            if (typeof mockExamFiles !== 'undefined') saveLocalJsonSafe('jinsang_mock_exam_files_v1', mockExamFiles);
+            if (typeof interviewReviews !== 'undefined') saveLocalJsonSafe('jinsang_interview_reviews_v1', interviewReviews);
+            if (typeof teacherConsultations !== 'undefined') saveLocalJsonSafe('jinsang_teacher_consultations_v1', teacherConsultations);
+            if (typeof teacherCalendarMemos !== 'undefined') saveLocalJsonSafe('jinsang_teacher_calendar_memos_v1', teacherCalendarMemos);
+          } catch (persistErr) { reject(persistErr); return; }
+          window.jinsangServerStorage.syncState().then(() => resolve({ok:true, mode:'github-pages', functionName}))
+            .catch(err => reject(err instanceof Error ? err : new Error(String(err))));
           return;
         }
         try {
@@ -4132,6 +4151,30 @@ function handleManualGradeFileInput(event){
   let apiUrl='';
   try{apiUrl=localStorage.getItem(CFG_KEY)||'';}catch(e){}
   let syncing=false, bootstrapped=false, writeQueue=Promise.resolve();
+  let bridgeFrame=null, bridgeReady=false, bridgeCounter=0;
+  const bridgePending=new Map();
+  function ensureBridge(){
+    if(bridgeFrame)return;
+    if(!apiUrl)throw new Error('먼저 서버 주소를 설정하세요.');
+    bridgeFrame=document.createElement('iframe');bridgeFrame.title='진학 데이터 서버 연결';bridgeFrame.setAttribute('aria-hidden','true');
+    bridgeFrame.style.cssText='position:absolute;width:1px;height:1px;left:-10000px;top:-10000px;border:0';
+    bridgeFrame.src=apiUrl+'?mode=bridge&v=1';
+    bridgeFrame.onload=()=>{bridgeReady=true;};document.body.appendChild(bridgeFrame);
+  }
+  window.addEventListener('message',event=>{
+    if(!bridgeFrame||event.source!==bridgeFrame.contentWindow||!event.data||event.data.type!=='jinsang-rpc-result')return;
+    const p=bridgePending.get(event.data.id);if(!p)return;bridgePending.delete(event.data.id);
+    if(event.data.result&&event.data.result.ok)p.resolve(event.data.result);else p.reject(new Error(event.data.result&&event.data.result.error||'서버가 요청을 거부했습니다.'));
+  });
+  function rpc(action,payload){
+    return new Promise((resolve,reject)=>{
+      try{ensureBridge();const id='r'+(++bridgeCounter)+'_'+Date.now();bridgePending.set(id,{resolve,reject});
+        const sendNow=()=>{try{bridgeFrame.contentWindow.postMessage({type:'jinsang-rpc',id,action,payload},'*');}catch(e){bridgePending.delete(id);reject(e);}};
+        // A newly created iframe may not yet have initialized google.script.run.
+        let attempts=0;const attempt=()=>{if(bridgeReady){sendNow();return;}if(++attempts>30){bridgePending.delete(id);reject(new Error('Apps Script 연결 준비 시간이 초과되었습니다. URL과 웹앱 배포 권한을 확인하세요.'));return;}setTimeout(attempt,300);};attempt();
+      }catch(e){reject(e);}
+    });
+  }
   const originalSet=Storage.prototype.setItem;
   const originalRemove=Storage.prototype.removeItem;
   const originalClear=Storage.prototype.clear;
@@ -4162,7 +4205,23 @@ function handleManualGradeFileInput(event){
     status:()=>({connected:!!apiUrl,url:apiUrl,bootstrapped}),
     configure:function(url){url=String(url||'').trim();if(!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec/.test(url))throw new Error('배포된 Apps Script 웹 앱 URL(/exec)을 입력해 주세요.');apiUrl=url;originalSet.call(localStorage,CFG_KEY,url);alert('서버 주소를 저장했습니다. 페이지를 새로고침하여 서버 연결을 시작합니다.');location.reload();},
     reconnect:function(){location.reload();},
-    syncAll:function(){if(!apiUrl)throw new Error('먼저 서버 주소를 설정하세요.');const items={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&!isConfigKey(k)){try{items[k]=JSON.parse(localStorage.getItem(k));}catch(e){items[k]=localStorage.getItem(k);}}}return send('bulkPut',{items});}
+    syncAll:function(){if(!apiUrl)throw new Error('먼저 서버 주소를 설정하세요.');const items={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&!isConfigKey(k)){try{items[k]=JSON.parse(localStorage.getItem(k));}catch(e){items[k]=localStorage.getItem(k);}}}return rpc('bulkPut',{items});},
+    syncState:function(){
+      if(!apiUrl)throw new Error('먼저 관리자 서버 설정에서 Apps Script 웹 앱 URL을 입력하세요.');
+      const items={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&!isConfigKey(k)){try{items[k]=JSON.parse(localStorage.getItem(k));}catch(e){items[k]=localStorage.getItem(k);}}}
+      // Keep important in-memory stores in sync even when a legacy handler did not write localStorage first.
+      try{if(Array.isArray(window.rawDatabase))items.jinsang_applications_v1=window.rawDatabase;}catch(e){}
+      try{if(Array.isArray(window.years))items.jinsang_years_v1=window.years;}catch(e){}
+      try{if(window.passwords&&typeof window.passwords==='object')items.jinsang_passwords_v1=window.passwords;}catch(e){}
+      try{if(Array.isArray(window.studentGrades))items.jinsang_student_grades_v1=window.studentGrades;}catch(e){}
+      try{if(Array.isArray(window.academicRecords))items.jinsang_academic_records_v1=window.academicRecords;}catch(e){}
+      try{if(Array.isArray(window.mockExamFiles))items.jinsang_mock_exam_files_v1=window.mockExamFiles;}catch(e){}
+      try{if(window.teacherConsultations&&typeof window.teacherConsultations==='object')items.jinsang_teacher_consultations_v1=window.teacherConsultations;}catch(e){}
+      try{if(window.teacherCalendarMemos&&typeof window.teacherCalendarMemos==='object')items.jinsang_teacher_calendar_memos_v1=window.teacherCalendarMemos;}catch(e){}
+      try{if(Array.isArray(window.interviewReviews))items.jinsang_interview_reviews_v1=window.interviewReviews;}catch(e){}
+      try{if(Array.isArray(window.academicRecords))items.jinsang_academic_records_v1=window.academicRecords;}catch(e){}
+      return rpc('bulkPut',{items});
+    }
   };
   function addServerSettings(){
     let b=document.getElementById('adminServerSettingsButton');
