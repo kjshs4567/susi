@@ -1182,7 +1182,7 @@
     let studentGrades = readLocalJsonSafe('jinsang_student_grades_v1', []);
     let interviewReviews = readLocalJsonSafe('jinsang_interview_reviews_v1', []);
     let selectedStudentReviewAppId = null;
-    let years = ["2026학년도", "2025학년도", "2024학년도", "2023학년도"];
+    let years = readLocalJsonSafe('jinsang_years_v1', ['2026학년도', '2025학년도', '2024학년도', '2023학년도']);
     let currentRole = null;
     let selectedRegion = "전체";
     let selectedType = null;
@@ -1206,10 +1206,10 @@
     let manageMonitorOnly = false;
 
     // Database Storage
-    let rawDatabase = [];
-    let teacherLocks = {};
-    let teacherConsultations = {};
-    let teacherCalendarMemos = {};
+    let rawDatabase = readLocalJsonSafe('jinsang_applications_v1', []);
+    let teacherLocks = readLocalJsonSafe('jinsang_teacher_student_locks_v1', {});
+    let teacherConsultations = readLocalJsonSafe('jinsang_teacher_consultations_v1', {});
+    let teacherCalendarMemos = readLocalJsonSafe('jinsang_teacher_calendar_memos_v1', {});
     let serverReady = false;
     let serverLoading = false;
 
@@ -1218,7 +1218,16 @@
       catch (e) { return fallback; }
     }
     function saveLocalJsonSafe(key, value) {
-      try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+      const serialized = JSON.stringify(value);
+      try { localStorage.setItem(key, serialized); }
+      catch (e) {
+        console.error('브라우저 저장 공간 부족 또는 저장 오류:', key, e);
+        // A failed local write must not be silently treated as success. Attempt a direct
+        // acknowledged server write when the shared bridge is available.
+        if (window.jinsangServerStorage && typeof window.jinsangServerStorage.put === 'function') {
+          window.jinsangServerStorage.put(key, value).catch(err => console.error('서버 직접 저장 실패:', key, err));
+        }
+      }
     }
 
     // Compatibility helpers used by grade uploads and interview/question management.
@@ -4232,6 +4241,7 @@ function handleManualGradeFileInput(event){
     reconnect:function(){location.reload();},
     syncAll:function(){if(!apiUrl)throw new Error('먼저 서버 주소를 설정하세요.');const items={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&!isConfigKey(k)){try{items[k]=JSON.parse(localStorage.getItem(k));}catch(e){items[k]=localStorage.getItem(k);}}}return rpc('bulkPut',{items});},
     invoke:function(functionName,args){return rpc('invoke',{functionName,args:args||[]});},
+    put:function(key,value){if(!apiUrl)return Promise.reject(new Error('먼저 서버 주소를 설정하세요.'));return writeQueue.then(()=>rpc('put',{key,value}));},
     syncState:function(){
       if(!apiUrl)throw new Error('먼저 관리자 서버 설정에서 Apps Script 웹 앱 URL을 입력하세요.');
       const items={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&!isConfigKey(k)){try{items[k]=JSON.parse(localStorage.getItem(k));}catch(e){items[k]=localStorage.getItem(k);}}}
@@ -4263,13 +4273,13 @@ function handleManualGradeFileInput(event){
           catch(e){localItems[k]=localStorage.getItem(k);}
         }
       }
-      if(Object.keys(serverItems).length===0){
-        const result = await rpc('bulkPut',{items:localItems});
-        if(!result || result.ok!==true) throw new Error(result && result.error || '초기 데이터 이전에 실패했습니다.');
-        bootstrapped=true;
-        originalSet.call(localStorage,SYNC_META,JSON.stringify({lastBootstrap:new Date().toISOString(),serverKeys:Object.keys(localItems).length}));
-        console.info('초기 데이터 이전 완료', Object.keys(localItems).length);
-        return;
+      // First visit to a partly populated server: migrate keys that exist only locally.
+      // Never overwrite an existing server key with stale browser data.
+      const missing={};
+      Object.keys(localItems).forEach(k=>{if(!Object.prototype.hasOwnProperty.call(serverItems,k))missing[k]=localItems[k];});
+      if(Object.keys(missing).length){
+        const migrated=await rpc('bulkPut',{items:missing});
+        if(!migrated || migrated.ok!==true)throw new Error(migrated&&migrated.error||'브라우저에만 있던 자료를 서버로 이전하지 못했습니다.');
       }
       let changed=false;
       syncing=true;
@@ -4278,10 +4288,12 @@ function handleManualGradeFileInput(event){
           const next=typeof serverItems[k]==='string'?serverItems[k]:JSON.stringify(serverItems[k]);
           if(originalGet.call(localStorage,k)!==next){originalSet.call(localStorage,k,next);changed=true;}
         });
+        // Record that server hydration completed; do not count this marker as app data.
+        originalSet.call(localStorage,SYNC_META,JSON.stringify({lastBootstrap:new Date().toISOString(),serverKeys:Object.keys(serverItems).length,migratedKeys:Object.keys(missing).length}));
         bootstrapped=true;
-        originalSet.call(localStorage,SYNC_META,JSON.stringify({lastBootstrap:new Date().toISOString(),serverKeys:Object.keys(serverItems).length}));
       } finally { syncing=false; }
       if(changed){ location.reload(); return; }
+      console.info('서버 동기화 준비 완료', {serverKeys:Object.keys(serverItems).length,migratedKeys:Object.keys(missing).length});
     } catch(err) {
       console.error('서버 초기 데이터 동기화 실패:',err);
       window.jinsangServerStorageLastError = String(err && err.message || err);
