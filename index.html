@@ -1264,19 +1264,39 @@
     function callServer(functionName, ...args) {
       return new Promise((resolve, reject) => {
         if (!isAppsScriptRuntime()) {
-          // GitHub Pages mode: persist the current app state through the Apps Script iframe bridge.
-          // The bridge returns a server-side acknowledgement; localStorage alone is not treated as success.
+          // Serialize lexical app state explicitly: top-level let variables are not window properties.
           if (!window.jinsangServerStorage || typeof window.jinsangServerStorage.syncState !== 'function') {
             reject(new Error('서버 연결 기능을 불러오지 못했습니다. 서버 URL을 확인하고 새로고침해 주세요.'));
             return;
           }
-          const serverCall = functionName === 'summarizeInterviewForUniversity' && typeof window.jinsangServerStorage.invoke === 'function' ? window.jinsangServerStorage.invoke(functionName,args) : window.jinsangServerStorage.syncState().then(() => ({ok:true, mode:'github-pages', functionName}));
-          serverCall.then(resolve).catch(err => reject(err instanceof Error ? err : new Error(String(err))));
+          try {
+            saveLocalJsonSafe('jinsang_applications_v1', Array.isArray(rawDatabase) ? rawDatabase : []);
+            saveLocalJsonSafe('jinsang_years_v1', Array.isArray(years) ? years : []);
+            saveLocalJsonSafe('jinsang_passwords_v1', passwords || {});
+            saveLocalJsonSafe('jinsang_student_grades_v1', Array.isArray(studentGrades) ? studentGrades : []);
+            saveLocalJsonSafe('jinsang_interview_reviews_v1', allInterviewReviews());
+            saveLocalJsonSafe('jinsang_academic_records_v1', Array.isArray(academicRecords) ? academicRecords : []);
+            saveLocalJsonSafe('jinsang_academic_overrides_v1', academicOverrides || {});
+            saveLocalJsonSafe('jinsang_mock_exam_files_v1', Array.isArray(mockExamFiles) ? mockExamFiles : []);
+            saveLocalJsonSafe('jinsang_mock_exam_records_v1', Array.isArray(mockExamRecords) ? mockExamRecords : []);
+            saveLocalJsonSafe('jinsang_teacher_student_locks_v1', teacherLocks || {});
+            saveLocalJsonSafe('jinsang_teacher_consultations_v1', teacherConsultations || {});
+            saveLocalJsonSafe('jinsang_teacher_calendar_memos_v1', teacherCalendarMemos || {});
+          } catch (stateError) {
+            reject(stateError instanceof Error ? stateError : new Error(String(stateError)));
+            return;
+          }
+          const serverCall = functionName === 'summarizeInterviewForUniversity' && typeof window.jinsangServerStorage.invoke === 'function'
+            ? window.jinsangServerStorage.invoke(functionName, args)
+            : window.jinsangServerStorage.syncState();
+          serverCall.then(result => {
+            if (result && result.ok === false) throw new Error(result.error || '서버 저장에 실패했습니다.');
+            resolve(result || {ok:true, mode:'github-pages', functionName});
+          }).catch(err => reject(err instanceof Error ? err : new Error(String(err))));
           return;
         }
-        try {
-          google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[functionName](...args);
-        } catch (err) { reject(err); }
+        try { google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[functionName](...args); }
+        catch (err) { reject(err); }
       });
     }
 
@@ -4179,6 +4199,7 @@ function handleManualGradeFileInput(event){
     });
   }
   const originalSet=Storage.prototype.setItem;
+  const originalGet=Storage.prototype.getItem;
   const originalRemove=Storage.prototype.removeItem;
   const originalClear=Storage.prototype.clear;
   function isConfigKey(k){return k===CFG_KEY||k===SYNC_META;}
@@ -4199,11 +4220,12 @@ function handleManualGradeFileInput(event){
   function queueWrite(key,value){
     if(!apiUrl||syncing||isConfigKey(key))return;
     let parsed;try{parsed=JSON.parse(value);}catch(e){parsed=value;}
-    writeQueue=writeQueue.then(()=>send('put',{key,value:parsed})).catch(e=>console.warn('서버 동기화 실패:',key,e));
+    // Use acknowledged iframe RPC rather than opaque fetch(mode:no-cors).
+    writeQueue=writeQueue.then(()=>rpc('put',{key,value:parsed})).catch(e=>console.error('서버 동기화 실패:',key,e));
   }
   Storage.prototype.setItem=function(key,value){originalSet.call(this,key,value);if(this===localStorage)queueWrite(String(key),String(value));};
-  Storage.prototype.removeItem=function(key){originalRemove.call(this,key);if(this===localStorage&&apiUrl&&!syncing&&!isConfigKey(String(key)))writeQueue=writeQueue.then(()=>send('remove',{key:String(key)})).catch(e=>console.warn(e));};
-  Storage.prototype.clear=function(){if(this===localStorage){const keys=[];for(let i=0;i<this.length;i++)keys.push(this.key(i));originalClear.call(this);if(apiUrl&&!syncing)keys.filter(k=>!isConfigKey(k)).forEach(k=>{writeQueue=writeQueue.then(()=>send('remove',{key:k})).catch(e=>console.warn(e));});}else originalClear.call(this);};
+  Storage.prototype.removeItem=function(key){originalRemove.call(this,key);if(this===localStorage&&apiUrl&&!syncing&&!isConfigKey(String(key)))writeQueue=writeQueue.then(()=>rpc('remove',{key:String(key)})).catch(e=>console.error('서버 삭제 동기화 실패:',key,e));};
+  Storage.prototype.clear=function(){if(this===localStorage){const keys=[];for(let i=0;i<this.length;i++)keys.push(this.key(i));originalClear.call(this);if(apiUrl&&!syncing)keys.filter(k=>!isConfigKey(k)).forEach(k=>{writeQueue=writeQueue.then(()=>rpc('remove',{key:k})).catch(e=>console.error('서버 초기화 동기화 실패:',k,e));});}else originalClear.call(this);};
   window.jinsangServerStorage={
     status:()=>({connected:!!apiUrl,url:apiUrl,bootstrapped}),
     configure:function(url){url=String(url||'').trim();if(!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec/.test(url))throw new Error('배포된 Apps Script 웹 앱 URL(/exec)을 입력해 주세요.');apiUrl=url;originalSet.call(localStorage,CFG_KEY,url);alert('서버 주소를 저장했습니다. 페이지를 새로고침하여 서버 연결을 시작합니다.');location.reload();},
@@ -4213,18 +4235,7 @@ function handleManualGradeFileInput(event){
     syncState:function(){
       if(!apiUrl)throw new Error('먼저 관리자 서버 설정에서 Apps Script 웹 앱 URL을 입력하세요.');
       const items={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&!isConfigKey(k)){try{items[k]=JSON.parse(localStorage.getItem(k));}catch(e){items[k]=localStorage.getItem(k);}}}
-      // Keep important in-memory stores in sync even when a legacy handler did not write localStorage first.
-      try{if(Array.isArray(window.rawDatabase))items.jinsang_applications_v1=window.rawDatabase;}catch(e){}
-      try{if(Array.isArray(window.years))items.jinsang_years_v1=window.years;}catch(e){}
-      try{if(window.passwords&&typeof window.passwords==='object')items.jinsang_passwords_v1=window.passwords;}catch(e){}
-      try{if(Array.isArray(window.studentGrades))items.jinsang_student_grades_v1=window.studentGrades;}catch(e){}
-      try{if(Array.isArray(window.academicRecords))items.jinsang_academic_records_v1=window.academicRecords;}catch(e){}
-      try{if(Array.isArray(window.mockExamFiles))items.jinsang_mock_exam_files_v1=window.mockExamFiles;}catch(e){}
-      try{if(window.teacherConsultations&&typeof window.teacherConsultations==='object')items.jinsang_teacher_consultations_v1=window.teacherConsultations;}catch(e){}
-      try{if(window.teacherCalendarMemos&&typeof window.teacherCalendarMemos==='object')items.jinsang_teacher_calendar_memos_v1=window.teacherCalendarMemos;}catch(e){}
-      try{if(Array.isArray(window.interviewReviews))items.jinsang_interview_reviews_v1=window.interviewReviews;}catch(e){}
-      try{if(Array.isArray(window.academicRecords))items.jinsang_academic_records_v1=window.academicRecords;}catch(e){}
-      return rpc('bulkPut',{items});
+      return writeQueue.then(()=>rpc('bulkPut',{items}));
     }
   };
   function addServerSettings(){
@@ -4237,28 +4248,46 @@ function handleManualGradeFileInput(event){
     document.body.appendChild(b);
   }
   window.refreshAdminServerSettings=addServerSettings;
-  function bootstrap(){
+  async function bootstrap(){
     addServerSettings();
     if(!apiUrl){console.info('서버 미연결: 우측 하단 서버 저장 설정에서 Apps Script URL을 입력하세요.');return;}
-    serverGet(data=>{
-      if(!data||data.ok!==true){console.warn('서버 초기화 응답 오류',data);return;}
-      const serverItems=data.items||{};
-      const localItems={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&!isConfigKey(k)){try{localItems[k]=JSON.parse(localStorage.getItem(k));}catch(e){localItems[k]=localStorage.getItem(k);}}}
-      syncing=true;
-      try{
-        if(data.empty){
-          // First connection: migrate existing browser data to the new server.
-          send('bulkPut',{items:localItems}).then(()=>{bootstrapped=true;}).catch(e=>console.error('초기 데이터 이전 실패',e));
-        }else{
-          Object.keys(serverItems).forEach(k=>originalSet.call(localStorage,k,typeof serverItems[k]==='string'?serverItems[k]:JSON.stringify(serverItems[k])));
-          bootstrapped=true;
-          // Reload once so app-level variables are initialized from server data.
-          if(sessionStorage.getItem('jinsang_server_hydrated')!=='1'){sessionStorage.setItem('jinsang_server_hydrated','1');location.reload();}
+    try {
+      const data = await rpc('readAll',{});
+      if(!data || data.ok !== true) throw new Error(data && data.error || '서버 초기화 응답이 올바르지 않습니다.');
+      const serverItems = data.items || {};
+      const localItems = {};
+      for(let i=0;i<localStorage.length;i++){
+        const k=localStorage.key(i);
+        if(k && !isConfigKey(k)){
+          try{localItems[k]=JSON.parse(localStorage.getItem(k));}
+          catch(e){localItems[k]=localStorage.getItem(k);}
         }
+      }
+      if(Object.keys(serverItems).length===0){
+        const result = await rpc('bulkPut',{items:localItems});
+        if(!result || result.ok!==true) throw new Error(result && result.error || '초기 데이터 이전에 실패했습니다.');
+        bootstrapped=true;
+        originalSet.call(localStorage,SYNC_META,JSON.stringify({lastBootstrap:new Date().toISOString(),serverKeys:Object.keys(localItems).length}));
+        console.info('초기 데이터 이전 완료', Object.keys(localItems).length);
+        return;
+      }
+      let changed=false;
+      syncing=true;
+      try {
+        Object.keys(serverItems).forEach(k=>{
+          const next=typeof serverItems[k]==='string'?serverItems[k]:JSON.stringify(serverItems[k]);
+          if(originalGet.call(localStorage,k)!==next){originalSet.call(localStorage,k,next);changed=true;}
+        });
+        bootstrapped=true;
         originalSet.call(localStorage,SYNC_META,JSON.stringify({lastBootstrap:new Date().toISOString(),serverKeys:Object.keys(serverItems).length}));
-      }finally{syncing=false;}
-    });
+      } finally { syncing=false; }
+      if(changed){ location.reload(); return; }
+    } catch(err) {
+      console.error('서버 초기 데이터 동기화 실패:',err);
+      window.jinsangServerStorageLastError = String(err && err.message || err);
+    }
   }
+
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bootstrap,{once:true});else bootstrap();
 })();
 </script>
